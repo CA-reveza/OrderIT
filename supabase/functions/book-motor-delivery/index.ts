@@ -21,13 +21,19 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const MOTOR_SUPABASE_URL = Deno.env.get('MOTOR_SUPABASE_URL')!
 const MOTOR_SERVICE_ROLE_KEY = Deno.env.get('MOTOR_SERVICE_ROLE_KEY')!
 
-// Recognized vehicle types, kept only to validate the request — the fare
-// itself comes from the order's own delivery_charge (set at checkout via
-// OrderIT's ₹140-base + ₹20/km formula), not recomputed here. The order is
-// the single source of truth for what the hotel was charged; MOTOR's
-// booking.fare_estimate just carries that same number through for the
-// driver to see, rather than a second, different calculation.
+// Recognized vehicle types — validated only if one is actually sent.
+// vehicle_type is now OPTIONAL: APMC no longer picks a vehicle when booking
+// (just "Book via MoveIT"), so most requests omit it entirely and the
+// booking lands in MOTOR with vehicle_type = null, invisible to any
+// driver's job feed until MOTOR's own admin assigns 2W vs 3W from
+// AdminDashboard (see motor_orderit_vehicle_optional_migration.sql).
 const KNOWN_VEHICLE_TYPES = new Set(['bike', 'three_wheeler', 'pickup', 'mini_truck', 'large_truck'])
+
+// Mirrors MOTOR's own bookings_orderit_max_distance CHECK constraint.
+// Checking it here too means a stray >20km booking attempt fails with a
+// clear message instead of an opaque "MOTOR booking failed" 502 from the
+// insert hitting that constraint on the other project.
+const MAX_ORDERIT_DELIVERY_KM = 20
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,41 +44,72 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { order_id, vehicle_type, distance_km } = await req.json()
-    if (!order_id || !vehicle_type || !distance_km) {
-      return json({ error: 'order_id, vehicle_type and distance_km are required' }, 400)
+    const body = await req.json()
+    // Accepts either the original single `order_id`, or `order_ids` (an
+    // array) for clubbing 2+ orders from the same supplier into one MoveIT
+    // trip. Both normalize to the same `orderIds` array below so the rest
+    // of the function doesn't need to care which one was sent.
+    const orderIds: string[] = Array.isArray(body.order_ids) && body.order_ids.length
+      ? body.order_ids
+      : (body.order_id ? [body.order_id] : [])
+    const { vehicle_type, distance_km } = body
+
+    if (!orderIds.length || !distance_km) {
+      return json({ error: 'order_id (or order_ids) and distance_km are required' }, 400)
     }
-    if (!KNOWN_VEHICLE_TYPES.has(vehicle_type)) return json({ error: 'Unknown vehicle_type' }, 400)
+    if (vehicle_type && !KNOWN_VEHICLE_TYPES.has(vehicle_type)) return json({ error: 'Unknown vehicle_type' }, 400)
+    if (Number(distance_km) > MAX_ORDERIT_DELIVERY_KM) {
+      return json({ error: `Distance can't exceed ${MAX_ORDERIT_DELIVERY_KM}km for OrderIT deliveries` }, 400)
+    }
 
     // Act as the calling user (respects OrderIT's RLS) to confirm they can
-    // actually see this order before we book anything on their behalf.
+    // actually see every order before we book anything on their behalf.
     const authHeader = req.headers.get('Authorization') ?? ''
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
     })
-    const { data: order, error: orderErr } = await userClient
+    const { data: orders, error: orderErr } = await userClient
       .from('orders')
-      .select('id, status, payment_status, delivery_charge, delivery_address, hotels(name, address), suppliers(name, apmc_yard, address)')
-      .eq('id', order_id)
-      .single()
-    if (orderErr || !order) return json({ error: 'Order not found or not accessible' }, 404)
-
-    // Same gate as DeliveryPanel.jsx enforces in the UI — checked again here
-    // server-side so this can't be bypassed by calling the function directly.
-    if (order.payment_status !== 'paid') {
-      return json({ error: 'Order must be paid before a delivery can be booked' }, 400)
-    }
-    if (!['packed', 'out_for_delivery', 'delivered'].includes(order.status)) {
-      return json({ error: 'Order must be packed before a delivery can be booked' }, 400)
+      .select('id, status, payment_status, supplier_id, delivery_charge, delivery_address, hotels(name, address), suppliers(name, apmc_yard, address)')
+      .in('id', orderIds)
+    if (orderErr || !orders || orders.length !== orderIds.length) {
+      return json({ error: 'One or more orders not found or not accessible' }, 404)
     }
 
-    const fare = Number(order.delivery_charge) || 0
-    const pickup = order.suppliers?.address || order.suppliers?.apmc_yard || order.suppliers?.name || 'Supplier'
-    const drop = order.delivery_address || order.hotels?.address || order.hotels?.name || 'Hotel'
+    // Clubbing only makes sense within one supplier's own pickup run.
+    const supplierIds = new Set(orders.map((o) => o.supplier_id))
+    if (supplierIds.size > 1) {
+      return json({ error: 'Clubbed orders must all be from the same supplier' }, 400)
+    }
+
+    // Same gates DeliveryPanel.jsx enforces in the UI — checked again here
+    // server-side, for every order, so this can't be bypassed by calling
+    // the function directly.
+    for (const order of orders) {
+      if (order.payment_status !== 'paid') {
+        return json({ error: `Order ${order.id.slice(0, 8)} must be paid before a delivery can be booked` }, 400)
+      }
+      if (!['packed', 'out_for_delivery', 'delivered'].includes(order.status)) {
+        return json({ error: `Order ${order.id.slice(0, 8)} must be packed before a delivery can be booked` }, 400)
+      }
+    }
+
+    const isClubbed = orders.length > 1
+    // The fare is always the sum of what was already fixed on each order at
+    // checkout — never recomputed from distance/vehicle here, clubbed or
+    // not. "The rates is as usual": clubbing changes how many trips APMC
+    // makes, not what any individual order was charged for delivery.
+    const fare = orders.reduce((sum, o) => sum + (Number(o.delivery_charge) || 0), 0)
+    const first = orders[0]
+    const pickup = first.suppliers?.address || first.suppliers?.apmc_yard || first.suppliers?.name || 'Supplier'
+    const drop = isClubbed
+      ? `${orders.length} orders: ${orders.map((o) => o.hotels?.name || o.delivery_address || o.id.slice(0, 8)).join(', ')}`
+      : (first.delivery_address || first.hotels?.address || first.hotels?.name || 'Hotel')
 
     // Insert the real booking into MOTOR's own database with MOTOR's
     // service-role key — this is what makes it show up in MOTOR's driver
-    // console exactly like any other job.
+    // console exactly like any other job, once an admin assigns a vehicle.
+    // One booking regardless of how many orders are clubbed into it.
     const motorClient = createClient(MOTOR_SUPABASE_URL, MOTOR_SERVICE_ROLE_KEY)
     const { data: booking, error: motorErr } = await motorClient
       .from('bookings')
@@ -81,39 +118,47 @@ Deno.serve(async (req) => {
         pickup_address: pickup,
         drop_address: drop,
         distance_km: Number(distance_km),
-        vehicle_type,
+        vehicle_type: vehicle_type || null,
         fare_estimate: fare,
         status: 'pending',
-        notes: `OrderIT order #${order.id.slice(0, 8)}`,
+        notes: isClubbed
+          ? `OrderIT clubbed delivery — ${orders.length} orders: ${orders.map((o) => `#${o.id.slice(0, 8)}`).join(', ')}`
+          : `OrderIT order #${first.id.slice(0, 8)}`,
         source: 'orderit',
-        external_order_id: order.id
+        external_order_id: first.id // primary/first order — the others are linked via deliveries.motor_booking_id below
       })
       .select()
       .single()
 
     if (motorErr) return json({ error: `MOTOR booking failed: ${motorErr.message}` }, 502)
 
-    // Mirror the booking back onto OrderIT's own deliveries row so the
+    // Mirror the booking back onto OrderIT's own deliveries rows so the
     // OrderIT UI has something to query without hitting MOTOR every time.
-    // Note: orders.delivery_charge is deliberately left untouched — it stays
-    // exactly what was charged to the hotel at checkout.
+    // One deliveries row per order, ALL sharing the same motor_booking_id —
+    // that's what makes clubbing work without any new tables: MOTOR's
+    // status webhook (motor-status-webhook) already updates
+    // `deliveries where motor_booking_id = ...`, so every clubbed order's
+    // status updates together automatically as the driver progresses.
+    // Note: each order's own delivery_charge is deliberately left
+    // untouched — it stays exactly what was charged to the hotel at
+    // checkout, regardless of how many orders end up riding together.
     const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     await adminClient.from('deliveries').upsert(
-      {
+      orders.map((order) => ({
         order_id: order.id,
         delivery_type: 'direct',
         fulfilled_via: 'motor',
-        vehicle_type,
+        vehicle_type: vehicle_type || null,
         distance_km: Number(distance_km),
-        fare_estimate: fare,
+        fare_estimate: Number(order.delivery_charge) || 0,
         motor_booking_id: booking.id,
         motor_status: booking.status,
         requested_at: new Date().toISOString()
-      },
+      })),
       { onConflict: 'order_id' }
     )
 
-    return json({ motor_booking_id: booking.id, fare_estimate: fare, status: booking.status })
+    return json({ motor_booking_id: booking.id, fare_estimate: fare, orders_clubbed: orders.length, status: booking.status })
   } catch (e) {
     return json({ error: String(e) }, 500)
   }

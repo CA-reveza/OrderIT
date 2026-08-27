@@ -5,7 +5,7 @@ import HotelSpendReport from '../components/HotelSpendReport'
 import QuoteRequests from '../components/QuoteRequests'
 import { downloadHotelOrderTemplate, parseHotelOrderTemplate } from '../lib/excelTemplates'
 import { CATEGORY_TILES, categoryTileFor } from '../lib/categoryTiles'
-import { deliveryCharge, platformFee, BASE_DELIVERY_KM, BASE_DELIVERY_CHARGE, PER_KM_CHARGE } from '../lib/orderFees'
+import { deliveryCharge, totalDeliveryCharge, hotelItemPrice, vehicleForWeight, VEHICLE_TIERS, BASE_DELIVERY_KM, DELIVERY_PLATFORM_CHARGE, MAX_DELIVERY_KM, AUTO_3W_WEIGHT_KG } from '../lib/orderFees'
 
 export default function HotelDashboard({ hotel }) {
   const [tab, setTab] = useState('order') // 'order' | 'orders' | 'bidding'
@@ -92,20 +92,47 @@ export default function HotelDashboard({ hotel }) {
   const cartLines = useMemo(() => {
     return priceRows
       .filter((row) => cart[row.product_id] > 0 && row.in_stock !== false)
-      .map((row) => ({
-        product_id: row.product_id,
-        name: row.products?.name,
-        unit: row.products?.unit,
-        qty: cart[row.product_id],
-        price: row.price,
-        lineTotal: cart[row.product_id] * row.price
-      }))
+      .map((row) => {
+        const qty = cart[row.product_id]
+        // unit_price stays the supplier's RAW price — this is what's
+        // stored (order_items.unit_price) and what APMC gets paid on.
+        // displayPrice is hotel-facing only (platform fee folded in for
+        // display), never written to the database — see
+        // schema_revert_embedded_fee_keep_raw_prices.sql for why.
+        const rawPrice = row.price
+        const displayPrice = hotelItemPrice(rawPrice)
+        return {
+          product_id: row.product_id,
+          name: row.products?.name,
+          unit: row.products?.unit,
+          qty,
+          rawPrice,
+          rawLineTotal: qty * rawPrice,
+          displayPrice,
+          displayLineTotal: qty * displayPrice,
+          weightKg: qty * (row.products?.weight_kg_per_unit ?? 1)
+        }
+      })
   }, [cart, priceRows])
 
-  const cartTotal = cartLines.reduce((sum, l) => sum + l.lineTotal, 0)
-  const deliveryChargeAmount = deliveryCharge(distanceKm)
-  const platformFeeAmount = platformFee(cartTotal)
-  const grandTotal = cartTotal + platformFeeAmount + deliveryChargeAmount
+  const cartTotalRaw = cartLines.reduce((sum, l) => sum + l.rawLineTotal, 0)
+  const cartTotalDisplay = cartLines.reduce((sum, l) => sum + l.displayLineTotal, 0) // what the hotel sees as "items"
+  const totalWeightKg = cartLines.reduce((sum, l) => sum + l.weightKg, 0)
+
+  // Orders over 20kg can't reasonably go on a 2-Wheeler — auto-switch the
+  // delivery tier instead of asking the hotel to pick. APMC still has full
+  // flexibility to actually book either vehicle later in DeliveryPanel; this
+  // only decides which tier is used for the checkout estimate/charge.
+  const deliveryVehicle = vehicleForWeight(totalWeightKg)
+  const vehicleTier = VEHICLE_TIERS[deliveryVehicle]
+
+  const deliveryChargeAmount = deliveryCharge(distanceKm, deliveryVehicle)
+  const deliveryTotalAmount = totalDeliveryCharge(distanceKm, deliveryVehicle) // distance charge + flat platform charge
+  // Platform fee is charged the same as ever (order_total * 3%) — just not
+  // shown to the hotel as its own line; cartTotalDisplay already reflects it
+  // per-item, so the grand total the hotel sees adds up on its own.
+  const grandTotal = cartTotalDisplay + deliveryTotalAmount
+  const distanceTooFar = distanceKm > MAX_DELIVERY_KM
   const selectedSupplierName = suppliers.find((s) => s.id === supplierId)?.name
 
   const setQty = (productId, qty) => {
@@ -142,6 +169,10 @@ export default function HotelDashboard({ hotel }) {
 
   const placeOrder = async () => {
     if (!cartLines.length) return
+    if (distanceTooFar) {
+      setMessage(`Delivery distance can't exceed ${MAX_DELIVERY_KM} km.`)
+      return
+    }
     setPlacing(true)
     setMessage('')
 
@@ -152,7 +183,8 @@ export default function HotelDashboard({ hotel }) {
         supplier_id: supplierId,
         delivery_address: hotel.address,
         delivery_distance_km: distanceKm,
-        delivery_charge: deliveryChargeAmount
+        delivery_charge: deliveryTotalAmount,
+        delivery_vehicle_type: deliveryVehicle
       })
       .select()
       .single()
@@ -167,14 +199,14 @@ export default function HotelDashboard({ hotel }) {
       order_id: order.id,
       product_id: l.product_id,
       quantity: l.qty,
-      unit_price: l.price
+      unit_price: l.rawPrice
     }))
 
     const { error: itemsErr } = await supabase.from('order_items').insert(items)
     if (itemsErr) {
       setMessage(`Order created but items failed: ${itemsErr.message}`)
     } else {
-      setMessage(`Order placed! Grand total ₹${grandTotal.toFixed(2)} (items ₹${cartTotal.toFixed(2)} + platform fee ₹${platformFeeAmount.toFixed(2)} + delivery ₹${deliveryChargeAmount.toFixed(2)}).`)
+      setMessage(`Order placed! Grand total ₹${grandTotal.toFixed(2)} (items ₹${cartTotalDisplay.toFixed(2)} + delivery ₹${deliveryTotalAmount.toFixed(2)}).`)
       setCart({})
       loadOrders()
     }
@@ -245,7 +277,7 @@ export default function HotelDashboard({ hotel }) {
                   return (
                     <tr key={row.id} className={outOfStock ? 'row-disabled' : ''}>
                       <td>{row.products?.name}</td>
-                      <td>₹{row.price} / {row.products?.unit}</td>
+                      <td>₹{hotelItemPrice(row.price)} / {row.products?.unit}</td>
                       <td>{row.grade}</td>
                       <td>
                         <span className={`stock-badge ${outOfStock ? 'out-of-stock' : 'in-stock'}`}>
@@ -284,38 +316,51 @@ export default function HotelDashboard({ hotel }) {
             {cartLines.map((l) => (
               <div key={l.product_id} className="cart-line">
                 <span>{l.name} × {l.qty} {l.unit}</span>
-                <span>₹{l.lineTotal.toFixed(2)}</span>
+                <span>₹{l.displayLineTotal.toFixed(2)}</span>
               </div>
             ))}
             {cartLines.length > 0 && (
               <>
+                <p className="muted small" style={{ marginTop: 6 }}>
+                  Total weight: {totalWeightKg.toFixed(1)} kg
+                  {deliveryVehicle === 'three_wheeler'
+                    ? ` — over ${AUTO_3W_WEIGHT_KG}kg, so this order needs a 3-Wheeler.`
+                    : ` (2-Wheeler OK up to ${AUTO_3W_WEIGHT_KG}kg).`}
+                </p>
+
                 <label style={{ marginTop: 10 }}>Delivery distance (km)</label>
                 <input
                   type="number"
                   min="0"
+                  max={MAX_DELIVERY_KM}
                   step="0.5"
                   className="qty-input"
                   value={distanceKm}
                   onChange={(e) => setDistanceKm(parseFloat(e.target.value) || 0)}
                 />
                 <p className="muted small" style={{ marginTop: 4 }}>
-                  ₹{BASE_DELIVERY_CHARGE} up to {BASE_DELIVERY_KM} km, then +₹{PER_KM_CHARGE}/km beyond that.
+                  {vehicleTier.label}: ₹{vehicleTier.baseCharge} up to {BASE_DELIVERY_KM} km, then +₹{vehicleTier.perKmAfter}/km beyond that, up to {MAX_DELIVERY_KM} km max.
                 </p>
+                {distanceTooFar && (
+                  <div className="alert alert-error" style={{ marginTop: 4 }}>
+                    Delivery distance can't exceed {MAX_DELIVERY_KM} km.
+                  </div>
+                )}
 
                 <div className="cart-line muted small" style={{ marginTop: 10 }}>
                   <span>Items subtotal</span>
-                  <span>₹{cartTotal.toFixed(2)}</span>
+                  <span>₹{cartTotalDisplay.toFixed(2)}</span>
                 </div>
                 <div className="cart-line muted small">
-                  <span>Platform fee (3%)</span>
-                  <span>₹{platformFeeAmount.toFixed(2)}</span>
-                </div>
-                <div className="cart-line muted small">
-                  <span>Delivery charge</span>
+                  <span>Delivery charge ({vehicleTier.label})</span>
                   <span>₹{deliveryChargeAmount.toFixed(2)}</span>
                 </div>
+                <div className="cart-line muted small">
+                  <span>Delivery platform charge</span>
+                  <span>₹{DELIVERY_PLATFORM_CHARGE.toFixed(2)}</span>
+                </div>
                 <div className="cart-total">Grand total: ₹{grandTotal.toFixed(2)}</div>
-                <button className="btn btn-primary" disabled={placing} onClick={placeOrder}>
+                <button className="btn btn-primary" disabled={placing || distanceTooFar} onClick={placeOrder}>
                   {placing ? 'Placing order…' : 'Place order'}
                 </button>
               </>

@@ -11,9 +11,13 @@ import MotorStatus from './MotorStatus'
 // which is exactly the mistake this gate exists to prevent.
 //
 // The fare charged for a MoveIT booking is always the order's own
-// delivery_charge (already fixed at checkout, per the ₹140/5km + ₹20/km
-// formula) — never recomputed from distance at booking time, so there's only
-// ever one number for "what delivery costs" on a given order.
+// delivery_charge (already fixed at checkout, per OrderIT's per-vehicle
+// formula mirroring MoveIT's own tiers) — never recomputed at booking time.
+//
+// APMC no longer picks a vehicle here — it's a single "Book via MoveIT"
+// click using the order's own checkout-time distance. MOTOR's own admin
+// decides 2-Wheeler vs 3-Wheeler afterwards (see MOTOR's AdminDashboard),
+// which is what actually puts the job in front of drivers.
 //
 // "Set partner manually" is temporarily removed (MoveIT-only for now) —
 // the code is still here, just not rendered, so it's a one-line change to
@@ -21,10 +25,7 @@ import MotorStatus from './MotorStatus'
 export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymentStatus, orderDeliveryCharge, orderDistanceKm }) {
   const [delivery, setDelivery] = useState(null)
   const [editing, setEditing] = useState(false)
-  const [bookingMode, setBookingMode] = useState(null)
   const [form, setForm] = useState({ delivery_type: 'direct', hub_name: '', partner_name: '', partner_phone: '' })
-  const [vehicleType, setVehicleType] = useState('')
-  const [distanceKm, setDistanceKm] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -57,18 +58,20 @@ export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymen
   }
 
   const requestMotorVehicle = async () => {
-    const km = parseFloat(distanceKm)
-    if (!km || km <= 0) return
+    // Vehicle is intentionally omitted — MOTOR's own admin assigns 2W/3W
+    // once the booking lands there (see book-motor-delivery's vehicle_type
+    // becoming optional). Distance comes from what the hotel entered at
+    // checkout; falls back to 5km (the base tier) if it's somehow missing.
+    const km = Number(orderDistanceKm) || 5
     setBusy(true)
     setError('')
     const { error } = await supabase.functions.invoke('book-motor-delivery', {
-      body: { order_id: orderId, vehicle_type: vehicleType, distance_km: km }
+      body: { order_id: orderId, distance_km: km }
     })
     setBusy(false)
     if (error) {
       setError(error.message || 'Failed to book via MoveIT. Check that the Edge Function is deployed and MoveIT secrets are set.')
     } else {
-      setBookingMode(null)
       load()
     }
   }
@@ -92,7 +95,7 @@ export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymen
 
   return (
     <div className="delivery-panel">
-      {!editing && !bookingMode && (
+      {!editing && (
         <div className="delivery-summary">
           <span className="muted small">
             🚚 {summaryText(delivery, vehicleLabel, viewerRole)}
@@ -117,20 +120,14 @@ export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymen
                   {SHOW_MANUAL_PARTNER && (
                     <button className="btn-link" onClick={() => setEditing(true)}>Set partner manually</button>
                   )}
-                  <button
-                    className="btn-link"
-                    onClick={() => {
-                      setVehicleType('')
-                      setDistanceKm(orderDistanceKm ? String(orderDistanceKm) : '')
-                      setBookingMode('motor')
-                    }}
-                  >
-                    Book via MoveIT
+                  <button className="btn-link" disabled={busy} onClick={requestMotorVehicle}>
+                    {busy ? 'Booking…' : 'Book via MoveIT'}
                   </button>
                 </>
               )}
             </span>
           )}
+          {error && <div className="alert alert-error">{error}</div>}
         </div>
       )}
 
@@ -152,38 +149,7 @@ export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymen
         </div>
       )}
 
-      {bookingMode && (
-        <div className="delivery-form">
-          <div className="muted small">Booking via MoveIT</div>
-          <select value={vehicleType} onChange={(e) => setVehicleType(e.target.value)}>
-            <option value="" disabled>Select vehicle type…</option>
-            {VEHICLE_TYPES.map((v) => (
-              <option key={v.id} value={v.id}>{v.label} — {v.desc} (up to {v.capacityKg}kg)</option>
-            ))}
-          </select>
-          <input
-            type="number" min="0" step="0.5" placeholder="Distance (km)"
-            value={distanceKm} onChange={(e) => setDistanceKm(e.target.value)}
-          />
-          <div className="muted small">
-            {orderDistanceKm
-              ? `Pre-filled from this order's delivery distance (${orderDistanceKm} km) — adjust only if it's wrong.`
-              : `No distance was recorded on this order at checkout — enter it for MoveIT's route record.`}
-          </div>
-          <div className="muted small">
-            Delivery charge (from this order, already fixed at checkout): ₹{Number(orderDeliveryCharge || 0).toFixed(2)}
-          </div>
-          {error && <div className="alert alert-error">{error}</div>}
-          <div className="delivery-form-actions">
-            <button className="btn btn-primary" disabled={busy || !distanceKm || !vehicleType} onClick={requestMotorVehicle}>
-              {busy ? 'Requesting…' : 'Book via MoveIT'}
-            </button>
-            <button className="btn-link" onClick={() => { setBookingMode(null); setError('') }}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {canEdit && delivery && !editing && !bookingMode && !isMotor && (
+      {canEdit && delivery && !editing && !isMotor && (
         <div className="delivery-form-actions">
           {!delivery.picked_up_at && <button className="btn-link" onClick={markPicked}>Mark picked up</button>}
           {delivery.picked_up_at && !delivery.in_transit_at && <button className="btn-link" onClick={markInTransit}>Mark in transit</button>}
@@ -191,7 +157,7 @@ export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymen
         </div>
       )}
 
-      {canEdit && delivery && !editing && !bookingMode && isMotor && !delivery.delivered_at && (
+      {canEdit && delivery && !editing && isMotor && !delivery.delivered_at && (
         <div className="delivery-form-actions">
           <button className="btn-link" onClick={markDelivered}>Force mark delivered (if MoveIT sync is stuck)</button>
         </div>

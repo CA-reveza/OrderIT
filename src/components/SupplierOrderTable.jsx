@@ -34,7 +34,7 @@ export default function SupplierOrderTable({ orders, onChanged }) {
             <th>Phone</th>
             <th>Email</th>
             <th>Order</th>
-            <th>Amount</th>
+            <th>Rate × Qty total</th>
             <th>Status</th>
             <th>Delivery</th>
             <th>Payment</th>
@@ -44,7 +44,6 @@ export default function SupplierOrderTable({ orders, onChanged }) {
           {orders.map((order) => {
             const isExpanded = expandedId === order.id
             const deliveryStatus = getDeliveryStatus(orderDelivery(order))
-            const grandTotal = Number(order.grand_total) || Number(order.order_total)
             return (
               <Fragment key={order.id}>
                 <tr>
@@ -60,7 +59,7 @@ export default function SupplierOrderTable({ orders, onChanged }) {
                       #{order.id.slice(0, 8)} {isExpanded ? '▲' : '▼'}
                     </button>
                   </td>
-                  <td>₹{grandTotal.toFixed(2)}</td>
+                  <td>₹{Number(order.order_total).toFixed(2)}</td>
                   <td><span className={`status-badge status-${order.status}`}>{STATUS_LABEL[order.status]}</span></td>
                   <td><span className={`delivery-badge delivery-${deliveryStatus.className}`}>{deliveryStatus.label}</span></td>
                   <td>

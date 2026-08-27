@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient'
 import SupplierOrderTable from '../components/SupplierOrderTable'
 import SupplierRevenueReport from '../components/SupplierRevenueReport'
 import OpenRequests from '../components/OpenRequests'
+import ClubDeliveries from '../components/ClubDeliveries'
 import { downloadSupplierPriceTemplate, parseSupplierPriceTemplate } from '../lib/excelTemplates'
 
 export default function SupplierDashboard({ supplier }) {
@@ -140,7 +141,12 @@ export default function SupplierDashboard({ supplier }) {
         <button className={tab === 'reports' ? 'tab active' : 'tab'} onClick={() => setTab('reports')}>Reports</button>
       </div>
 
-      {tab === 'orders' && <SupplierOrderTable orders={orders} onChanged={loadOrders} />}
+      {tab === 'orders' && (
+        <>
+          <ClubDeliveries supplier={supplier} />
+          <SupplierOrderTable orders={orders} onChanged={loadOrders} />
+        </>
+      )}
 
       {tab === 'reports' && <SupplierRevenueReport orders={orders} />}
 

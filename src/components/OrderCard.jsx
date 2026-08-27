@@ -4,6 +4,7 @@ import PaymentButton from './PaymentButton'
 import DeliveryPanel from './DeliveryPanel'
 import OrderTrackingStepper from './OrderTrackingStepper'
 import { downloadInvoice } from '../lib/invoice'
+import { hotelItemPrice } from '../lib/orderFees'
 
 const STATUS_FLOW = {
   pending: ['accepted', 'rejected'],
@@ -77,28 +78,48 @@ export default function OrderCard({ order, viewerRole, onChanged, onBack }) {
       <table className="table small">
         <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr></thead>
         <tbody>
-          {order.order_items?.map((it) => (
-            <tr key={it.id}>
-              <td>{it.products?.name}</td>
-              <td>{it.quantity} {it.products?.unit}</td>
-              <td>₹{it.unit_price}</td>
-              <td>₹{it.line_total ?? (it.quantity * it.unit_price).toFixed(2)}</td>
-            </tr>
-          ))}
+          {order.order_items?.map((it) => {
+            // order_items.unit_price is always the supplier's raw price —
+            // hotel viewers see it marked up (platform fee folded in, same
+            // as at checkout); supplier/admin see the raw number they're
+            // actually paid on.
+            const rate = viewerRole === 'hotel' ? hotelItemPrice(it.unit_price) : Number(it.unit_price)
+            return (
+              <tr key={it.id}>
+                <td>{it.products?.name}</td>
+                <td>{it.quantity} {it.products?.unit}</td>
+                <td>₹{rate}</td>
+                <td>₹{(it.quantity * rate).toFixed(2)}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
 
       <div className="order-card-footer">
-        <div>
-          <div className="muted small">Items subtotal: ₹{Number(order.order_total).toFixed(2)}</div>
-          <div className="muted small">Platform fee ({order.platform_fee_pct ?? 3}%): ₹{Number(order.platform_fee_amount || 0).toFixed(2)}</div>
-          <div className="muted small">Delivery charge: ₹{Number(order.delivery_charge || 0).toFixed(2)}</div>
-          <div>Grand total: <strong>₹{grandTotal.toFixed(2)}</strong></div>
-        </div>
-        {viewerRole === 'admin' && (
-          <div className="muted small">
-            Commission ({order.commission_pct}%): ₹{Number(order.commission_amount).toFixed(2)} · Delivery contribution: ₹{Number(order.delivery_contribution).toFixed(2)}
-          </div>
+        {viewerRole === 'supplier' ? (
+          // APMC only ever sees their own goods value — Item, Rate, Quantity,
+          // Total bill. No delivery charge, no platform fee, no grand total —
+          // those are between the hotel and OrderIT, not APMC's concern.
+          <div>Total bill: <strong>₹{Number(order.order_total).toFixed(2)}</strong></div>
+        ) : (
+          <>
+            <div>
+              <div className="muted small">
+                Items subtotal: ₹{(viewerRole === 'hotel' ? hotelItemPrice(order.order_total) : Number(order.order_total)).toFixed(2)}
+              </div>
+              {viewerRole === 'admin' && (
+                <div className="muted small">Platform fee ({order.platform_fee_pct ?? 3}%): ₹{Number(order.platform_fee_amount || 0).toFixed(2)}</div>
+              )}
+              <div className="muted small">Delivery charge: ₹{Number(order.delivery_charge || 0).toFixed(2)}</div>
+              <div>Grand total: <strong>₹{grandTotal.toFixed(2)}</strong></div>
+            </div>
+            {viewerRole === 'admin' && (
+              <div className="muted small">
+                Commission ({order.commission_pct}%): ₹{Number(order.commission_amount).toFixed(2)} · Delivery contribution: ₹{Number(order.delivery_contribution).toFixed(2)}
+              </div>
+            )}
+          </>
         )}
       </div>
 

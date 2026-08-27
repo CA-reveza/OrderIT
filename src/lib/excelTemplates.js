@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import { hotelItemPrice } from './orderFees'
 
 // ----------------------------------------------------------------------------
 // SUPPLIER SIDE — download a price-list template pre-filled with today's
@@ -79,7 +80,7 @@ export function downloadHotelOrderTemplate(priceRows, supplierName) {
   const rows = priceRows.map((row) => ({
     [HOTEL_HEADERS[0]]: row.products?.name,
     [HOTEL_HEADERS[1]]: row.products?.unit,
-    [HOTEL_HEADERS[2]]: row.price,
+    [HOTEL_HEADERS[2]]: hotelItemPrice(row.price), // hotel-facing price, platform fee already included
     [HOTEL_HEADERS[3]]: row.in_stock === false ? 'Out of stock' : 'In stock',
     [HOTEL_HEADERS[4]]: ''
   }))

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, Fragment } from 'react'
 import { supabase } from '../supabaseClient'
-import { BASE_DELIVERY_KM, BASE_DELIVERY_CHARGE, platformFee } from '../lib/orderFees'
+import { BASE_DELIVERY_KM, totalDeliveryCharge, hotelItemPrice } from '../lib/orderFees'
 
 export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
   const [requests, setRequests] = useState([])
@@ -103,7 +103,7 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
         supplier_id: quote.supplier_id,
         delivery_address: hotel.address,
         delivery_distance_km: BASE_DELIVERY_KM,
-        delivery_charge: BASE_DELIVERY_CHARGE
+        delivery_charge: totalDeliveryCharge(BASE_DELIVERY_KM)
       })
       .select()
       .single()
@@ -115,14 +115,14 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
         order_id: order.id,
         product_id: sqi.product_id,
         quantity: reqItem?.quantity || 0,
-        unit_price: sqi.price
+        unit_price: sqi.price // raw supplier price — stays what APMC gets paid on
       }
     })
     await supabase.from('order_items').insert(items)
     await supabase.from('quote_requests').update({ status: 'closed' }).eq('id', request.id)
 
-    const grandTotal = Number(quote.total_price) + platformFee(quote.total_price) + BASE_DELIVERY_CHARGE
-    setMessage(`Order placed with ${quote.suppliers?.name} — items ₹${Number(quote.total_price).toFixed(2)}, grand total ≈₹${grandTotal.toFixed(2)} (includes 3% platform fee + delivery — review the exact total on the order).`)
+    const grandTotal = hotelItemPrice(quote.total_price) + totalDeliveryCharge(BASE_DELIVERY_KM)
+    setMessage(`Order placed with ${quote.suppliers?.name} — items ₹${hotelItemPrice(quote.total_price).toFixed(2)}, grand total ≈₹${grandTotal.toFixed(2)} (includes delivery — review the exact total on the order).`)
     load()
     onOrderPlaced?.()
   }
@@ -192,7 +192,7 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
                   <Fragment key={q.id}>
                     <tr>
                       <td>{q.suppliers?.name} {q.suppliers?.apmc_yard ? `(${q.suppliers.apmc_yard})` : ''}</td>
-                      <td>₹{Number(q.total_price).toFixed(2)}</td>
+                      <td>₹{hotelItemPrice(q.total_price).toFixed(2)}</td>
                       <td>
                         <button className="btn-link" onClick={() => setExpandedQuote(expandedQuote === q.id ? null : q.id)}>
                           {expandedQuote === q.id ? 'Hide items' : 'View items'}
@@ -213,7 +213,7 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
                               {q.supplier_quote_items?.map((sqi) => (
                                 <tr key={sqi.id}>
                                   <td>{sqi.products?.name}</td>
-                                  <td>₹{sqi.price}</td>
+                                  <td>₹{hotelItemPrice(sqi.price)}</td>
                                   <td>{sqi.grade}</td>
                                   <td>{sqi.available_qty ?? '—'}</td>
                                 </tr>

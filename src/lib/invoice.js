@@ -50,11 +50,10 @@ export function downloadInvoice(order) {
   doc.setFontSize(9)
   doc.setTextColor(80)
   doc.text(`Items subtotal: Rs. ${Number(order.order_total).toFixed(2)}`, 14, finalY)
-  doc.text(`Platform fee (${order.platform_fee_pct ?? 3}%): Rs. ${Number(order.platform_fee_amount || 0).toFixed(2)}`, 14, finalY + 6)
-  doc.text(`Delivery charge: Rs. ${Number(order.delivery_charge || 0).toFixed(2)}`, 14, finalY + 12)
+  doc.text(`Delivery charge: Rs. ${Number(order.delivery_charge || 0).toFixed(2)}`, 14, finalY + 6)
   doc.setFontSize(11)
   doc.setTextColor(0)
-  doc.text(`Grand total: Rs. ${grandTotal.toFixed(2)}`, 14, finalY + 20)
+  doc.text(`Grand total: Rs. ${grandTotal.toFixed(2)}`, 14, finalY + 14)
   doc.setFontSize(8)
   doc.setTextColor(120)
   doc.text(
