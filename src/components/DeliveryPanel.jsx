@@ -70,7 +70,17 @@ export default function DeliveryPanel({ orderId, viewerRole, orderStatus, paymen
     })
     setBusy(false)
     if (error) {
-      setError(error.message || 'Failed to book via MoveIT. Check that the Edge Function is deployed and MoveIT secrets are set.')
+      // supabase-js's error.message for a non-2xx response is always the
+      // generic "Edge Function returned a non-2xx status code" — the real
+      // reason is the JSON body on error.context, which it never parses.
+      let detail = ''
+      try {
+        const body = await error.context?.json?.()
+        detail = body?.error || ''
+      } catch {
+        // response body wasn't JSON (e.g. a raw 500/timeout) — fall through
+      }
+      setError(detail || error.message || 'Failed to book via MoveIT. Check that the Edge Function is deployed and MoveIT secrets are set.')
     } else {
       load()
     }
