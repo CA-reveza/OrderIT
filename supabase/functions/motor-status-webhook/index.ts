@@ -66,6 +66,22 @@ Deno.serve(async (req) => {
       .eq('motor_booking_id', booking.id)
 
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+
+    // APMC no longer marks orders out for delivery / delivered — MoveIT's
+    // driver progress drives it. Moves every order on this booking (more
+    // than one if they were clubbed), and only ever forwards, never back.
+    const orderStatus =
+      booking.status === 'completed' ? 'delivered'
+      : (booking.status === 'picked_up' || booking.status === 'in_transit') ? 'out_for_delivery'
+      : null
+    if (orderStatus) {
+      const { data: links } = await admin.from('deliveries').select('order_id').eq('motor_booking_id', booking.id)
+      const ids = (links || []).map((l) => l.order_id)
+      if (ids.length) {
+        const from = orderStatus === 'delivered' ? ['packed', 'out_for_delivery'] : ['packed']
+        await admin.from('orders').update({ status: orderStatus }).in('id', ids).in('status', from)
+      }
+    }
     return new Response(JSON.stringify({ ok: true }), { status: 200 })
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 })

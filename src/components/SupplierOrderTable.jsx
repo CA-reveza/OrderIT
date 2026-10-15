@@ -1,6 +1,5 @@
 import { useState, Fragment } from 'react'
 import OrderCard from './OrderCard'
-import { getDeliveryStatus } from '../lib/deliveryStatus'
 
 const STATUS_LABEL = {
   pending: 'Pending',
@@ -12,12 +11,8 @@ const STATUS_LABEL = {
   cancelled: 'Cancelled'
 }
 
-function orderDelivery(order) {
-  return Array.isArray(order.deliveries) ? order.deliveries[0] : order.deliveries
-}
-
 // Compact incoming-orders list for suppliers: just enough to triage at a
-// glance (who, how to reach them, how much, what stage). Clicking the order
+// glance (who, what they ordered, how much, what stage). Nothing about delivery — that's handled entirely outside APMC's view. Clicking the order
 // number expands the full OrderCard (items, delivery panel, status actions)
 // in place, right below that row.
 export default function SupplierOrderTable({ orders, onChanged }) {
@@ -36,14 +31,12 @@ export default function SupplierOrderTable({ orders, onChanged }) {
             <th>Order</th>
             <th>Rate × Qty total</th>
             <th>Status</th>
-            <th>Delivery</th>
             <th>Payment</th>
           </tr>
         </thead>
         <tbody>
           {orders.map((order) => {
             const isExpanded = expandedId === order.id
-            const deliveryStatus = getDeliveryStatus(orderDelivery(order))
             return (
               <Fragment key={order.id}>
                 <tr>
@@ -61,7 +54,6 @@ export default function SupplierOrderTable({ orders, onChanged }) {
                   </td>
                   <td>₹{Number(order.order_total).toFixed(2)}</td>
                   <td><span className={`status-badge status-${order.status}`}>{STATUS_LABEL[order.status]}</span></td>
-                  <td><span className={`delivery-badge delivery-${deliveryStatus.className}`}>{deliveryStatus.label}</span></td>
                   <td>
                     <span className={`pay-badge pay-${order.payment_status === 'paid' ? 'paid' : 'unpaid'}`}>
                       {order.payment_status === 'paid' ? '✓ Paid' : 'Unpaid'}
@@ -70,7 +62,7 @@ export default function SupplierOrderTable({ orders, onChanged }) {
                 </tr>
                 {isExpanded && (
                   <tr>
-                    <td colSpan={8} className="order-detail-cell">
+                    <td colSpan={7} className="order-detail-cell">
                       <OrderCard order={order} viewerRole="supplier" onChanged={onChanged} onBack={() => setExpandedId(null)} />
                     </td>
                   </tr>

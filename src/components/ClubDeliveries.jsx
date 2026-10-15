@@ -1,3 +1,6 @@
+// NOTE: no longer mounted anywhere — APMC has nothing to do with delivery or
+// MoveIT. Orders are auto-booked on 'packed'; MoveIT admin can give several
+// bookings to one driver to combine them. Kept for reference only.
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../supabaseClient'
 

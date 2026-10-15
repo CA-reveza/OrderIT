@@ -1,23 +1,24 @@
 -- ============================================================================
 -- Migration — Product weight, for auto-selecting a 3-Wheeler on heavy orders
--- Run on the OrderIT Supabase project, after schema.sql.
--- Safe to re-run.
+-- Run on the OrderIT Supabase project, after schema.sql. Safe to re-run.
 --
--- Hotels ordering more than 20kg total in one go can't reasonably expect a
--- 2-Wheeler to carry it — the checkout now auto-switches the delivery
--- estimate to the 3-Wheeler tier when that happens (see vehicleForWeight()
--- in src/lib/orderFees.js), which needs a per-product weight to sum against
--- the cart.
---
--- Defaults to 1kg per unit, which is correct for any product priced in
--- 'kg'. For products priced in other units (piece, dozen, litre, crate...),
--- update this to the actual per-unit weight so the 20kg threshold is
--- meaningful — there's no product-management screen in this app yet, so for
--- now that's a manual SQL update:
+-- Orders over 20kg can't reasonably go on a 2-Wheeler, so checkout switches
+-- the delivery estimate to the 3-Wheeler tier (vehicleForWeight() in
+-- src/lib/orderFees.js). Cart weight is calculated AUTOMATICALLY from each
+-- item's unit and quantity — nothing to maintain per product. The column
+-- below is just an optional override for products whose unit doesn't map to
+-- a weight, e.g.:
 --   update products set weight_kg_per_unit = 0.06 where name = 'Egg' and unit = 'piece';
 -- ============================================================================
 
-alter table products add column if not exists weight_kg_per_unit numeric not null default 1;
+alter table products add column if not exists weight_kg_per_unit numeric;
+-- Weight is now worked out automatically from each product's unit (kg, litre,
+-- bunch...) in src/lib/orderFees.js, so this column is only an optional
+-- per-product override. Earlier versions of this migration defaulted it to 1,
+-- which wrongly counted e.g. a bunch of coriander as 1kg — clear those.
+alter table products alter column weight_kg_per_unit drop not null;
+alter table products alter column weight_kg_per_unit drop default;
+update products set weight_kg_per_unit = null where weight_kg_per_unit = 1;
 
 -- Records the vehicle the checkout auto-selected based on cart weight, for
 -- APMC/admin reference — this is informational only. It does NOT restrict

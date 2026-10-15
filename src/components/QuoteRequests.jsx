@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, Fragment } from 'react'
 import { supabase } from '../supabaseClient'
-import { BASE_DELIVERY_KM, totalDeliveryCharge, hotelItemPrice } from '../lib/orderFees'
+import { BASE_DELIVERY_KM, totalDeliveryCharge, hotelItemPrice, vehicleForWeight, productUnitWeightKg, VEHICLE_TIERS } from '../lib/orderFees'
 
 export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
   const [requests, setRequests] = useState([])
@@ -93,9 +93,13 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
 
   const acceptQuote = async (request, quote) => {
     setMessage('')
-    // Quote acceptance doesn't have its own distance input — default to the
-    // base tier; the hotel can see/adjust the actual grand total on the
-    // order detail once created, same as a normal cart checkout.
+    // Quote acceptance has no distance input, so it's priced at the 5km base.
+    // Weight is worked out automatically from the requested items; over 20kg
+    // means the 3-Wheeler rate applies instead of the 2-Wheeler one.
+    const weightKg = (request.quote_request_items || []).reduce(
+      (sum, qi) => sum + Number(qi.quantity || 0) * productUnitWeightKg(qi.products), 0)
+    const vehicle = vehicleForWeight(weightKg)
+    const deliveryTotal = totalDeliveryCharge(BASE_DELIVERY_KM, vehicle)
     const { data: order, error: orderErr } = await supabase
       .from('orders')
       .insert({
@@ -103,7 +107,8 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
         supplier_id: quote.supplier_id,
         delivery_address: hotel.address,
         delivery_distance_km: BASE_DELIVERY_KM,
-        delivery_charge: totalDeliveryCharge(BASE_DELIVERY_KM)
+        delivery_charge: deliveryTotal,
+        delivery_vehicle_type: vehicle
       })
       .select()
       .single()
@@ -121,8 +126,9 @@ export default function QuoteRequests({ hotel, products, onOrderPlaced }) {
     await supabase.from('order_items').insert(items)
     await supabase.from('quote_requests').update({ status: 'closed' }).eq('id', request.id)
 
-    const grandTotal = hotelItemPrice(quote.total_price) + totalDeliveryCharge(BASE_DELIVERY_KM)
-    setMessage(`Order placed with ${quote.suppliers?.name} — items ₹${hotelItemPrice(quote.total_price).toFixed(2)}, grand total ≈₹${grandTotal.toFixed(2)} (includes delivery — review the exact total on the order).`)
+    const tier = VEHICLE_TIERS[vehicle]
+    const grandTotal = hotelItemPrice(quote.total_price) + deliveryTotal
+    setMessage(`Order placed with ${quote.suppliers?.name} — items ₹${hotelItemPrice(quote.total_price).toFixed(2)}, grand total ≈₹${grandTotal.toFixed(2)}. Delivery is priced for a ${tier.label} (${weightKg.toFixed(1)} kg) at ${BASE_DELIVERY_KM} km: ₹${tier.baseCharge} up to ${BASE_DELIVERY_KM} km, then +₹${tier.perKmAfter}/km beyond that.`)
     load()
     onOrderPlaced?.()
   }

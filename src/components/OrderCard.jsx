@@ -9,8 +9,10 @@ import { hotelItemPrice } from '../lib/orderFees'
 const STATUS_FLOW = {
   pending: ['accepted', 'rejected'],
   accepted: ['packed'],
-  packed: ['out_for_delivery'],
-  out_for_delivery: ['delivered'],
+  // APMC's job ends at "packed". Out for delivery / delivered are set
+  // automatically from MoveIT's driver progress (motor-status-webhook).
+  packed: [],
+  out_for_delivery: [],
   delivered: [],
   rejected: [],
   cancelled: []
@@ -33,6 +35,13 @@ export default function OrderCard({ order, viewerRole, onChanged, onBack }) {
   const updateStatus = async (status) => {
     setBusy(true)
     const { error } = await supabase.from('orders').update({ status }).eq('id', order.id)
+    if (!error && status === 'packed') {
+      // Packed (which already requires payment) is the hand-off point: ask
+      // MoveIT to pick it up automatically. APMC sees nothing of this — if it
+      // fails, OrderIT admin can still book it from the delivery panel.
+      supabase.functions.invoke('book-motor-delivery', { body: { order_id: order.id } })
+        .then(({ error: e }) => { if (e) console.warn('Auto-booking MoveIT failed:', e.message) })
+    }
     setBusy(false)
     if (!error) onChanged?.()
   }
@@ -60,7 +69,7 @@ export default function OrderCard({ order, viewerRole, onChanged, onBack }) {
         <span className={`status-badge status-${order.status}`}>{STATUS_LABEL[order.status]}</span>
       </div>
 
-      <OrderTrackingStepper order={order} delivery={delivery} />
+      {viewerRole !== 'supplier' && <OrderTrackingStepper order={order} delivery={delivery} />}
 
       <div className="order-card-badges">
         <span className={`pay-badge pay-${isPaid ? 'paid' : 'unpaid'}`}>
@@ -72,7 +81,7 @@ export default function OrderCard({ order, viewerRole, onChanged, onBack }) {
       <div className="order-card-meta">
         {order.hotels?.name && <div>Hotel: {order.hotels.name}</div>}
         {order.suppliers?.name && <div>Supplier: {order.suppliers.name} {order.suppliers.apmc_yard ? `(${order.suppliers.apmc_yard})` : ''}</div>}
-        {order.delivery_address && <div>Deliver to: {order.delivery_address}</div>}
+        {viewerRole !== 'supplier' && order.delivery_address && <div>Deliver to: {order.delivery_address}</div>}
       </div>
 
       <table className="table small">
@@ -123,17 +132,19 @@ export default function OrderCard({ order, viewerRole, onChanged, onBack }) {
         )}
       </div>
 
-      <DeliveryPanel
-        orderId={order.id}
-        viewerRole={viewerRole}
-        orderStatus={order.status}
-        paymentStatus={order.payment_status}
-        orderDeliveryCharge={order.delivery_charge}
-        orderDistanceKm={order.delivery_distance_km}
-      />
+      {viewerRole !== 'supplier' && (
+        <DeliveryPanel
+          orderId={order.id}
+          viewerRole={viewerRole}
+          orderStatus={order.status}
+          paymentStatus={order.payment_status}
+          orderDeliveryCharge={order.delivery_charge}
+          orderDistanceKm={order.delivery_distance_km}
+        />
+      )}
 
       {paymentGateBlocked && viewerRole === 'supplier' && (
-        <div className="alert alert-info">Waiting for payment before this order can move to packed/delivery.</div>
+        <div className="alert alert-info">Waiting for the hotel's payment before this order can be marked packed.</div>
       )}
 
       <div className="order-card-actions">

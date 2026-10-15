@@ -5,7 +5,7 @@ import HotelSpendReport from '../components/HotelSpendReport'
 import QuoteRequests from '../components/QuoteRequests'
 import { downloadHotelOrderTemplate, parseHotelOrderTemplate } from '../lib/excelTemplates'
 import { CATEGORY_TILES, categoryTileFor } from '../lib/categoryTiles'
-import { deliveryCharge, totalDeliveryCharge, hotelItemPrice, vehicleForWeight, VEHICLE_TIERS, BASE_DELIVERY_KM, DELIVERY_PLATFORM_CHARGE, MAX_DELIVERY_KM, AUTO_3W_WEIGHT_KG } from '../lib/orderFees'
+import { deliveryCharge, totalDeliveryCharge, hotelItemPrice, vehicleForWeight, productUnitWeightKg, VEHICLE_TIERS, BASE_DELIVERY_KM, DELIVERY_PLATFORM_CHARGE, MAX_DELIVERY_KM, AUTO_3W_WEIGHT_KG } from '../lib/orderFees'
 
 export default function HotelDashboard({ hotel }) {
   const [tab, setTab] = useState('order') // 'order' | 'orders' | 'bidding'
@@ -110,7 +110,7 @@ export default function HotelDashboard({ hotel }) {
           rawLineTotal: qty * rawPrice,
           displayPrice,
           displayLineTotal: qty * displayPrice,
-          weightKg: qty * (row.products?.weight_kg_per_unit ?? 1)
+          weightKg: qty * productUnitWeightKg(row.products)
         }
       })
   }, [cart, priceRows])

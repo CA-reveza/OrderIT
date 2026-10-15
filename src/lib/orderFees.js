@@ -30,6 +30,30 @@ export const DELIVERY_PLATFORM_CHARGE = 20
 // the app auto-selects a 3-Wheeler instead of asking the hotel to guess.
 export const AUTO_3W_WEIGHT_KG = 20
 
+// Approximate kg per ONE unit of each unit the catalog uses, so cart weight
+// is worked out automatically from what's actually ordered — no one has to
+// maintain a weight per product. 'litre' is treated as 1kg (close enough
+// for oil/milk), and a 'bunch' (coriander, mint etc.) as ~0.25kg. Units not
+// listed here fall back to 1kg, the safe side for the 20kg 3-Wheeler cut-off.
+const UNIT_WEIGHT_KG = {
+  kg: 1, kilogram: 1, g: 0.001, gm: 0.001, gram: 0.001,
+  quintal: 100, ton: 1000, tonne: 1000,
+  l: 1, litre: 1, liter: 1, ml: 0.001,
+  bunch: 0.25
+}
+
+export function unitWeightKg(unit) {
+  return UNIT_WEIGHT_KG[String(unit || '').trim().toLowerCase()] ?? 1
+}
+
+// Weight of ONE unit of a product: an explicit products.weight_kg_per_unit
+// (optional override, e.g. a 'piece' product) wins, otherwise it's derived
+// from the unit itself.
+export function productUnitWeightKg(product) {
+  const explicit = Number(product?.weight_kg_per_unit)
+  return explicit > 0 ? explicit : unitWeightKg(product?.unit)
+}
+
 export function vehicleForWeight(totalWeightKg) {
   return Number(totalWeightKg) > AUTO_3W_WEIGHT_KG ? 'three_wheeler' : 'bike'
 }

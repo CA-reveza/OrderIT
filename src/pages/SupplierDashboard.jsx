@@ -3,7 +3,6 @@ import { supabase } from '../supabaseClient'
 import SupplierOrderTable from '../components/SupplierOrderTable'
 import SupplierRevenueReport from '../components/SupplierRevenueReport'
 import OpenRequests from '../components/OpenRequests'
-import ClubDeliveries from '../components/ClubDeliveries'
 import { downloadSupplierPriceTemplate, parseSupplierPriceTemplate } from '../lib/excelTemplates'
 
 export default function SupplierDashboard({ supplier }) {
@@ -55,17 +54,6 @@ export default function SupplierDashboard({ supplier }) {
         { event: '*', schema: 'public', table: 'orders', filter: `supplier_id=eq.${supplier.id}` },
         () => loadOrders()
       )
-      .subscribe()
-    return () => supabase.removeChannel(channel)
-  }, [supplier, loadOrders])
-
-  // deliveries has no supplier_id to filter on, so refresh on any change —
-  // this is what surfaces a MoveIT driver accepting/progressing a booking.
-  useEffect(() => {
-    if (!supplier?.id) return
-    const channel = supabase
-      .channel(`supplier-deliveries-${supplier.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, () => loadOrders())
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [supplier, loadOrders])
@@ -141,12 +129,7 @@ export default function SupplierDashboard({ supplier }) {
         <button className={tab === 'reports' ? 'tab active' : 'tab'} onClick={() => setTab('reports')}>Reports</button>
       </div>
 
-      {tab === 'orders' && (
-        <>
-          <ClubDeliveries supplier={supplier} />
-          <SupplierOrderTable orders={orders} onChanged={loadOrders} />
-        </>
-      )}
+      {tab === 'orders' && <SupplierOrderTable orders={orders} onChanged={loadOrders} />}
 
       {tab === 'reports' && <SupplierRevenueReport orders={orders} />}
 
